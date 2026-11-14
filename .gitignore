@@ -1,0 +1,24 @@
+# macOS
+.DS_Store
+
+# SwiftPM build output
+.build/
+.swiftpm/
+
+# Assembled app (rebuild with ./perry build)
+dist/
+
+# Python
+__pycache__/
+*.pyc
+
+# Sprite-sheet working files (slice_sheet.py previews, source sheets)
+preview*.png
+*.bak
+
+# Local Claude Code settings
+.claude/settings.local.json
+
+# Secrets, should any ever appear
+.env
+.env.*

@@ -1,0 +1,90 @@
+#!/bin/bash
+# Perry control script.  Usage: ./perry <command>
+set -euo pipefail
+cd "$(dirname "$0")"
+PORT=7717
+BIN="$PWD/dist/Perry.app/Contents/MacOS/Perry"
+LABEL=com.jordanweideman.perry
+PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
+UID_=$(id -u)
+
+post() { curl -s -m 2 -X POST "http://127.0.0.1:$PORT/$1" || echo "Perry is not running (try ./perry run)"; echo; }
+
+launch() {
+  [ -x "$BIN" ] || ./build.sh
+  if launchctl print "gui/$UID_/$LABEL" >/dev/null 2>&1; then
+    launchctl kickstart -k "gui/$UID_/$LABEL"      # installed: let launchd restart it
+  else
+    pkill -x Perry 2>/dev/null || true
+    (nohup "$BIN" >/dev/null 2>&1 &)
+  fi
+  echo "Perry launched (stays hidden until Claude Code works)"
+}
+
+case "${1:-help}" in
+  build)     ./build.sh ;;
+  run)       launch ;;
+  debug)     [ -x "$BIN" ] || ./build.sh; pkill -x Perry 2>/dev/null || true; PERRY_DEBUG=1 exec "$BIN" ;;
+  quit)
+    if launchctl print "gui/$UID_/$LABEL" >/dev/null 2>&1; then
+      echo "Perry is installed to start at login, so macOS will restart him within a second."
+      echo "Use './perry pause' to actually stop him."
+    fi
+    post quit ;;
+  start)     post start ;;
+  complete)  post complete ;;
+  hide)      post hide ;;
+  ping)      curl -s -m 2 "http://127.0.0.1:$PORT/ping" || echo "Perry is not running"; echo ;;
+  hooks)     python3 Tools/hooks.py "${2:-install}" ;;
+  ax)
+    echo "Accessibility granted: $(curl -s -m 2 http://127.0.0.1:$PORT/ping | grep -o '"accessibility":[a-z]*' | cut -d: -f2 || echo unknown)"
+    curl -s -m 2 -X POST "http://127.0.0.1:$PORT/ax" >/dev/null 2>&1 || true
+    echo "Opening System Settings → Privacy & Security → Accessibility. Turn Perry on there."
+    open "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility" ;;
+  pause)
+    launchctl bootout "gui/$UID_/$LABEL" 2>/dev/null || true
+    launchctl disable "gui/$UID_/$LABEL" 2>/dev/null || true    # survives restarts
+    pkill -x Perry 2>/dev/null || true
+    echo "Paused. Perry is stopped and will stay stopped, even after a restart."
+    echo "Bring him back with: ./perry resume" ;;
+  resume)
+    [ -f "$PLIST" ] || { echo "Perry is not installed. Run: ./perry install"; exit 1; }
+    launchctl enable "gui/$UID_/$LABEL" 2>/dev/null || true
+    launchctl bootout "gui/$UID_/$LABEL" 2>/dev/null || true
+    launchctl bootstrap "gui/$UID_" "$PLIST"
+    echo "Resumed. Perry is running again (hidden until Claude Code works)." ;;
+  install)
+    ./build.sh
+    mkdir -p "$HOME/Library/LaunchAgents"
+    cat > "$PLIST" <<PL
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>$LABEL</string>
+  <key>ProgramArguments</key><array><string>$BIN</string></array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ProcessType</key><string>Interactive</string>
+</dict></plist>
+PL
+    launchctl bootout "gui/$UID_/$LABEL" 2>/dev/null || true
+    launchctl enable "gui/$UID_/$LABEL" 2>/dev/null || true      # clear an earlier ./perry pause
+    pkill -x Perry 2>/dev/null || true
+    launchctl bootstrap "gui/$UID_" "$PLIST"
+    python3 Tools/hooks.py install
+    echo "Installed: Perry now starts at login. Check with ./perry ping" ;;
+  uninstall)
+    launchctl bootout "gui/$UID_/$LABEL" 2>/dev/null || true
+    launchctl enable "gui/$UID_/$LABEL" 2>/dev/null || true      # leave no lingering pause flag
+    tccutil reset Accessibility "$LABEL" 2>/dev/null || true       # drop the Accessibility entry
+    rm -f "$PLIST"
+    python3 Tools/hooks.py remove
+    pkill -x Perry 2>/dev/null || true
+    echo "Uninstalled. Delete this folder to remove Perry entirely." ;;
+  *)
+    echo "usage: ./perry build | run | debug | quit | start | complete | hide | ping"
+    echo "       ./perry pause | resume         — stop/restart Perry, survives a reboot"
+    echo "       ./perry ax                     — check/grant the Accessibility permission"
+    echo "       ./perry hooks install|remove   — Claude Code hooks only"
+    echo "       ./perry install | uninstall    — start-at-login + hooks" ;;
+esac
